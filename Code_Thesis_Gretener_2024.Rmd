@@ -1,0 +1,1610 @@
+---
+title: "Thesis Script - Kathrin Gretener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 8, fig.height = 5)
+```
+
+
+# Pre-settings ---------------------------------------------
+
+# Clear the global environment 
+
+```{r}
+rm(list = ls())
+```
+
+# Load needed libraries 
+
+```{r}
+library(tidyverse)
+library(here)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(lubridate)
+library(ggthemes)
+library(zoo)
+library(gridExtra)
+library(grid)
+library(janitor)
+library(gtable)
+library(png)
+library(spatstat)
+library(quantreg)
+library(zoo)
+library(skimr)
+library(rvest)
+library(stringr)
+library(gdata)
+library(MatchIt)
+library(janitor)
+library(ggridges)
+library(patchwork)
+library(panelr)
+library(haven)
+library(descr)
+library(questionr)
+library(fixest)
+library(gmodels)
+library(gtsummary)
+library(gt)
+library(webshot)
+library(modelsummary)
+library(plm)
+library(knitr)
+library(psych)
+library(table1)
+library(scales)  
+library(haven)
+library(descr)
+library(stargazer)
+library(gtsummary)
+library(ggplot2)
+library(plm)
+library(dplyr)
+library(tidyr)
+library(table1)
+library(modelsummary)
+library(psych)
+
+```
+
+# Set relative paths
+
+```{r}
+## Set relative path
+
+getwd()
+
+my_dir <- list()
+
+# Input
+my_dir$input_raw_data <- "data/"
+my_dir$input_gradtage_csv <- "data/gradtage/"
+
+# Output
+my_dir$output_processed_data <- "output/processed_data/"
+my_dir$output_figures <- "output/figures_rmd/"
+my_dir$output_tables <- "output/tables/"
+
+```
+
+# Load the data 
+
+##Load data - Neues Berlin
+
+```{r}
+
+file_path <- "../data/Verbrauchsdaten_alle Liegenschaften_final.xlsx"
+
+df_nb_raw <- tibble(read_excel(file_path))
+
+
+head(df_nb_raw)
+names(df_nb_raw)
+
+# Create a function to show missings of a given variable
+show_missings <- function(dat) {
+  n <- sum(is.na(dat))
+  cat("Missing values: ", n, "\n", sep = "")
+  invisible(dat)    
+  # input dat doesn't get printed out
+  #return(n)
+}
+
+show_missings(df_nb_raw)
+
+```
+##Load data - Heating Degree Days 
+
+```{r}
+
+# browseURL("https://opendata.dwd.de/climate_environment/CDC/derived_germany/techn/monthly/heating_degreedays/hdd_3807/recent/")
+
+baseurl <- "https://opendata.dwd.de/climate_environment/CDC/derived_germany/techn/monthly/heating_degreedays/hdd_3807/recent/"
+
+gradtageurls <- paste0(baseurl, "gradtage_20", rep(19:23, each = 12), sprintf("%02d", rep(1:12)), ".csv")
+
+#setting the working directory for the data of "Heizgradtage" 
+
+getwd()
+
+my_dir$input_gradtage_csv <- "data/gradtage/"
+
+folder_csv_files <- paste0(my_dir$input_gradtage_csv)
+
+for (i in seq_along(gradtageurls)) {
+  # Extract the filename from the URL
+  current_name <- basename(gradtageurls[i])
+  
+  # Only update, don't replace
+  if (!file.exists(paste0(folder_csv_files, current_name))) {
+    # Print the URL
+    cat("Downloading from:", gradtageurls[i], "\n")
+    
+    # Skip article when we run into an error
+    tryCatch(
+      {
+        download.file(gradtageurls[i], destfile = paste0(folder_csv_files, current_name))
+        cat("Download successful.\n")
+      },
+      error = function(e) {
+        message("Error: ", e$message, "\n")
+      },
+      warning = function(w) {
+        message("Warning: ", w$message, "\n")
+      }
+    )
+    # Don't overload their server --> be polite!
+    Sys.sleep(runif(1, 0, 1))
+  } 
+}
+
+# List all CSV files in the folder
+csv_files <- list.files(path = my_dir$input_gradtage_csv, pattern = "\\.csv$", full.names = TRUE)
+
+# Initialize an empty list to store data frames
+
+data_frames_gradtage <- list()
+
+data_frames_gradtage
+
+# Read each CSV file into a data frame and skip the first 3 rows (because the excel file has a format where the 3 first rows are unnecessary, only title of empty columns). Also, I know that the data for December 2023 is not available yet, so I exclude it from the function
+
+for (file in csv_files) {
+  data <- read.csv(file, skip = 3, header = TRUE, sep = ";")
+  data_frames_gradtage[[file]] <- data
+}
+
+df_gradtage_raw <- bind_rows(data_frames_gradtage)
+
+df_gradtage_raw
+```
+
+
+
+# Cleaning the Data 
+
+## Cleaning data - Neues Berlin 
+
+```{r}
+#Select the variables of interest, changing name to English and reordering variables according to our interest
+
+df_nb_processed <- df_nb_raw |> 
+  select( 
+    user_id= `VER_KEY`,
+    energy_type = Zähler,
+    living_area_heated = `Beheizbare Wohnfläche`,
+    living_area_total = `Nutzfläche`,
+    year= `Jahr`, 
+    january= `Januar`, 
+    february= `Februar`, 
+    march= `März`, 
+    april= `April`, 
+    may= `Mai`,
+    june= `Juni`,
+    july= `Juli`,
+    august= `August`,
+    september= `September`,
+    october= `Oktober`, 
+    november= `November`,
+    december= `Dezember`,
+    floor_raw= Etage,
+    energy_class= Energieeffizienzklasse,
+    building_year= Baujahr, 
+    insulation_dummy= Gedämmt, 
+    building_type = Gebäudetyp,
+    street = Straße2,
+    city_district = Stadtteil,
+    object = Objekt,
+    economic_entity = Wirtschaftseinhaeit,
+    property_key = `Liegenschaft  Key`,
+    balcony_dummy= `Balkon vorhanden`, 
+    energy_carrier= Energieträger,
+    heating_system= `Art des Heizungssystems`,
+    payment_proportion= `Umlageschlüssel`, 
+    energy_provider= `Name des Energieversorgers`,
+    tenant_birthyear = `Geburtstag  Mieter`,
+    tenant_gender = `Geschlecht Mieter`,
+    fixed_costs= `Ø Kaltmiete`,
+    variable_costs= `Warmmiete(HZ)`,
+    UVI_method = `Genutzte Variante für  UVI´s`, 
+    UVI_refused_dummy = `Verzicht auf monatliche UVI`, 
+    social_assist= `Arbeitsam/Sozialamt bezahlt?`, 
+    EED_2018_date = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nInfos zu EU Energy Efficiency Directive (EED) 2018`, 
+    heizkostenverordnung_2021_date = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nInfos zur Umsetzung der Heizkostenverordnung 2021`, 
+    UVI_date = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nUnterjährige Verbrauchsinformation (UVI)`,
+    bill_2020_date = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nAbrechnung 2020`, 
+    bill_2021_date = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nAbrechnung 2021`, 
+    energy_saving_info_date = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nInfos und Tipps zum Energiesparen, Heizen und Lüften`, 
+    increase_price_info_date = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nUnterrichtung über Anpassung/Erhöhung der Vorauszahlungen für Energie- und Betriebskosten (inklusive Höhe der Anpassung)`, 
+    ensikumav = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nEnSikuMaV`, 
+    ensimimav = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nEnSikuMaV`,
+    strompreisbremse = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nStrompreisbremse`,
+    gaspreisbremse_stufe1 = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nStufe 1 der Gas- bzw. Fernwärmepreisbremse:\r\nErdgas-Wärme-Soforthilfegesetz (EWSG)`,
+    gaspreisbremse_stufe2 = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nStufe 2 der Gas- bzw. Fernwärmepreisbremse`,
+    atrott_sonderheft = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nFrau Atrott: Artikel, Zusatzblatt, Sonderheft`,
+    atrott_climate_cards = `Dummy \r\n(1 für Tag der Zustellung, sonst 0)\r\n\r\nFrau Atrott: Schimmelschäden - Klimakarten`)
+
+
+df_nb_processed <- df_nb_processed |> 
+  relocate(social_assist, .after = energy_type)
+
+```
+
+
+
+## Cleaning data - Heating Degree Days 
+
+```{r}
+# clean column name 
+
+df_gradtage_processed <- df_gradtage_raw |> 
+  clean_names()
+
+df_gradtage_processed <- df_gradtage_raw |> 
+  dplyr::select( 
+    x_id= `X.ID`,
+    latitude = `geogr..Breite`,
+    longitude = `geogr..Laenge`,
+    station = `Station`,
+    month = `Monat`,
+    number_days = `Anzahl.Tage`,
+    sum_days_temp = `Monatsgradtage`,
+    number_heating_days = `Anzahl.Heiztage`,
+    average_09_18 = `Mittelwert.2009.2018`,
+    average_10_19 = `Mittelwert.2010.2019`,
+    average_11_20 = `Mittelwert.2011.2020`,
+    average_12_21 = `Mittelwert.2012.2021`,
+    average_13_22 = `Mittelwert.2013.2022`,
+    )
+
+#select the stations of interest, namely the station called "BERLIN - BUCH" - we initially used the station MARZAHN, but this station doesn't have data available after July 2023 
+
+df_gradtage_buch <- df_gradtage_processed  |> 
+  filter(x_id == 400) 
+                                                 
+#turn the "station" column into a character format
+df_gradtage_buch$station <- as.character(df_gradtage_buch$station)
+
+#turn the month column into a date
+
+df_gradtage_buch <- df_gradtage_buch |> 
+   mutate(month = as.Date(paste0(month, "01"), format = "%Y%m%d"))
+```
+
+# Data Transformation 1
+
+## Data Transformation - Neues Berlin
+
+### Character into factors: turn the variables into factor by giving levels - Neues Berlin
+
+#### Energy Efficiency 
+```{r}
+# Let's attribute levels for the efficiency levels for each building 
+
+energy_class_levels <- c("B", "C", "D", "E", "F")
+
+df_nb_processed <- df_nb_processed |> 
+  mutate(energy_class = factor(energy_class, levels = energy_class_levels))
+
+levels(df_nb_processed$energy_class)
+
+# In order to analyse the energy efficiency level in a later stage, I transform the categorical data into ordinal data 
+
+df_nb_processed <- df_nb_processed |> 
+  mutate(energy_class_numeric = as.integer(energy_class)) |> 
+  relocate(energy_class_numeric, .after = energy_class)
+```
+
+#### Floor 
+
+
+### Floor_raw transformation
+
+```{r}
+# Extract floor number and total floors
+df_nb_processed <- df_nb_processed %>%
+  mutate(
+    floor_number = as.factor(str_extract(floor_raw, "\\d+(?= von)")) 
+  ) %>%
+  relocate(floor_number, .after = floor_raw)  
+
+# Extract floor number and total floors
+df_nb_processed <- df_nb_processed %>%
+  mutate(
+    floor_total = as.factor(str_extract(floor_raw, "(?<=von )\\d+"))  
+  ) %>%
+  relocate(floor_total, .after = floor_number)  
+
+# Create a new variable "floor_type" to specify whether a person lives on the first floor, a floor in between or on the last floor 
+
+# Convert floor_number and floor_total to numeric
+df_nb_processed$floor_number <- as.numeric(as.character(df_nb_processed$floor_number))
+df_nb_processed$floor_total <- as.numeric(as.character(df_nb_processed$floor_total))
+
+# Create floor_type based on conditions
+df_nb_processed$floor_type <- ifelse(
+  df_nb_processed$floor_number == 1 & df_nb_processed$floor_number != df_nb_processed$floor_total,
+  "first floor",
+  ifelse(
+    df_nb_processed$floor_number == df_nb_processed$floor_total | df_nb_processed$floor_number == 1,
+    "top floor",
+    "floor in between"
+  )
+)
+
+df_nb_processed <- df_nb_processed |> 
+  relocate(floor_type, .after = floor_total)
+```
+
+### Logical variables : turn the variables into logical by using ifelse - Neues Berlin
+
+```{r}
+df_nb_processed <- df_nb_processed |> 
+  mutate(
+    social_assist = ifelse(
+      tolower(social_assist) %in% c("ja") & social_assist != 1,
+      1,
+      ifelse(
+        tolower(social_assist) %in% c("nein") & social_assist != 0,
+        0,
+        social_assist
+      )
+    ),
+    balcony_dummy = ifelse(
+      tolower(balcony_dummy) %in% c("ja") & balcony_dummy != 1,
+      1,
+      ifelse(
+        tolower(balcony_dummy) %in% c("nein") & balcony_dummy != 0,
+        0,
+        balcony_dummy
+      )
+    ),
+    insulation_dummy = ifelse(
+      tolower(insulation_dummy) %in% c("ja") & insulation_dummy != 1,
+      1,
+      ifelse(
+        tolower(insulation_dummy) %in% c("nein") & insulation_dummy != 0,
+        0,
+        insulation_dummy
+      )
+    )
+  )
+
+#Transform the variables above into a numeric variable (currently a character)
+
+df_nb_processed$social_assist <- factor(df_nb_processed$social_assist)
+
+df_nb_processed$balcony_dummy <- factor(df_nb_processed$balcony_dummy)
+
+df_nb_processed$insulation_dummy <- factor(df_nb_processed$insulation_dummy)
+
+```
+
+### Clean Incorrect Numbers 
+
+#### Birthyear 
+
+```{r}
+# Extract unique values and sort them in ascending order
+sorted_unique_birthyears <- sort(unique(df_nb_processed$tenant_birthyear))
+
+# Display the sorted unique birth years
+sorted_unique_birthyears
+
+# [1]  1921  1925  1926  1927  1928  1929  1930  1931  1932  1933  1934  1935  1936  1937  1938  1939  1940  1941
+# [19]  1942  1943  1944  1945  1946  1947  1948  1949  1950  1951  1952  1953  1954  1955  1956  1957  1958  1959
+# [37]  1960  1961  1962  1963  1964  1965  1966  1967  1968  1969  1970  1971  1972  1973  1974  1975  1976  1977
+# [55]  1978  1979  1980  1981  1982  1983  1984  1985  1986  1987  1988  1989  1990  1991  1992  1993  1994  1995
+# [73]  1996  1997  1998  1999  2000  2001 14694 15349 19143 22850
+
+# --> the last 4 values 14694 / 15349 / 19143 / 22850 must be incorrect. Let's remove them from the dataframe df_nb_processed
+
+# Specify the target birth years
+weird_birthyears <- c(14694, 15349, 19143, 22850, 159121) 
+
+# Filter the dataframe for those birth years and select the user_id
+weird_birthyears_user_ids <- df_nb_processed[df_nb_processed$tenant_birthyear %in% weird_birthyears, "user_id"]
+
+# Display the user_ids
+unique(weird_birthyears_user_ids)
+
+# 28902				-2912				5353				5522
+
+# Specify the user_ids of interest
+user_ids_birthday_weird <- c(28902, -2912, 5353, 5522, -11323	)
+
+# Filter the dataframe for these user_ids and select user_id and social_assist
+user_ids_birthday_weird_social <- df_nb_processed[df_nb_processed$user_id %in% user_ids_birthday_weird, c("user_id", "social_assist")]
+
+# Display the filtered data
+unique(user_ids_birthday_weird_social)
+
+# All user_id are not in the social_assist programme, so we can decide to delete them. 
+
+# Filter the dataframe to exclude these user_ids
+df_nb_processed <- df_nb_processed[!df_nb_processed$user_id %in% user_ids_birthday_weird, ]
+
+# Filter rows where tenant_birthyear is NA and select the user_id column
+user_ids_with_na_birthyear <- df_nb_processed %>%
+  filter(is.na(tenant_birthyear)) %>%
+  select(user_id) %>%
+  pull()
+
+# To see the unique user_ids with missing tenant_birthyear
+unique_user_ids_with_na_birthyear <- unique(user_ids_with_na_birthyear)
+
+
+# There are 60 households with missing tenant_birthyear
+
+# Filter the dataframe for these user_ids and select user_id and social_assist
+user_ids_missing_byear_social <- df_nb_processed[df_nb_processed$user_id %in% unique_user_ids_with_na_birthyear, c("user_id", "social_assist")]
+
+table(user_ids_missing_byear_social)
+
+# --> There is 1 household with a missing birthyear and receiving social assistance.
+
+
+## Remove households without birthyear 
+
+df_nb_processed <- df_nb_processed %>%
+  filter(!user_id %in% user_ids_with_na_birthyear)
+
+length(unique(df_nb_processed$user_id))
+
+
+```
+
+
+### Remove Social Assistance Changer
+
+```{r}
+
+# Let's find out if some households changed their social_assist status over time
+
+user_both_social <- df_nb_wide_full |>
+   group_by(user_id) |>
+   summarise(has_both = all(c("0", "1") %in% social_assist)) |>
+   filter(has_both) |>
+   pull(user_id)
+
+# We get the result that both the user_id -11511 and 31948 do not have a consistent value for the column "social_assist" over time. Let's explore if it is a time-related change (status change) or a erronous value
+
+df_filtered_31948 <- df_nb_processed[df_nb_processed$user_id %in% c("31948"), ] |>
+   relocate(social_assist, .after = energy_type)
+
+# --> the individual has the value 0 for all rows expect for cold water between 2020 and 2023 (then it is 1). This is clearly a mistake
+
+df_filtered_11511 <- df_nb_processed[df_nb_processed$user_id %in% c("-11511"), ] |>
+   relocate(social_assist, .after = energy_type)
+
+# --> the individual has the value 1 for all rows expect for warm water for 2022 and 2023 and cold water between 2019 and 2023 (then it is 1). This is clearly a mistake
+
+# Let's remove the 2 identified user_ids from df_processed
+
+# Filter rows in df_nb_processed for identified user_ids
+
+length(unique(df_nb_processed$user_id))
+
+# Before the removal of the social changer, there were 4155 households 
+
+df_nb_processed <- df_nb_processed[!(df_nb_processed$user_id %in% c("-11511", "31948")), ]
+
+length(unique(df_nb_processed$user_id))
+
+# Assuming df_nb_processed is your dataframe
+df_social_assist_distribution <- df_nb_processed %>%
+  group_by(social_assist) %>%
+  summarise(unique_user_count = n_distinct(user_id))
+
+# Display the result
+print(df_social_assist_distribution)
+
+
+```
+
+
+# PIVOT Processed to Long  
+
+## Total 
+
+```{r}
+#Let's turn the dataframe into a long format so that we can analyse each month separately
+
+df_nb_long <- df_nb_processed |> 
+  pivot_longer(cols = january:december, # Pivot the Januar to December columns
+               names_to = "month",
+               values_to = "consumption") |> 
+  relocate(year, month, consumption, .after = energy_type) 
+
+
+
+# Define a vector of English month names
+month_names <- c("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december")
+
+df_nb_long <- df_nb_long |> 
+  mutate(month_numeric = match(month, month_names),  # Convert month names to numeric
+         year_month = paste(year, sprintf("%02d", month_numeric), sep = "-")) |> 
+ relocate(year_month, .after = month) 
+
+# Eliminate the months without observation (January 2019, November and December 2023) and add a year_month column in a date format 
+
+df_nb_long <- df_nb_long %>%
+  filter(year_month != "2019-01" & year_month != "2023-11" & year_month != "2023-12")
+
+df_nb_long <- df_nb_long %>%
+  mutate(year_month = as.Date(paste0(year_month, "-01"), format = "%Y-%m-%d"))
+```
+
+### Remove the NAs from Consumption
+
+```{r}
+df_nb_long <- subset(df_nb_long, !is.na(consumption))
+
+length(unique(df_nb_long$user_id))
+
+```
+
+### Add Consumption per Sqm
+
+```{r}
+
+df_nb_long <- df_nb_long |> 
+  mutate(consumption_sqm = consumption/living_area_heated) 
+
+df_nb_long <- df_nb_long |> 
+  relocate(consumption_sqm, .after = consumption)
+```
+
+
+
+
+### Transform heating into kWh 
+
+```{r}
+df_nb_long <- df_nb_long |> 
+  mutate(consumption = ifelse(energy_type == "Heizung", consumption * 1.73, consumption))
+
+# df_nb_long <- df_nb_long |> 
+#   mutate(consumption_log = ifelse(energy_type == "Heizung", consumption_log * 1.73, consumption_log))
+```
+
+
+## Heating 
+
+```{r}
+df_nb_long_heating <- df_nb_long |>
+  filter(energy_type %in% c("Heizung", "Wärmemengenzähler"))
+
+```
+
+### Integration of Variables 
+
+```{r}
+### Integration of Price Dummy (August 22)
+ 
+
+df_nb_long_heating <- df_nb_long_heating |> 
+  mutate(
+  price_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-07-01"), 0, 1)
+  )|> 
+  relocate(price_dummy, .after = social_assist)
+  
+df_nb_long_heating <- df_nb_long_heating |> 
+   mutate(price_dummy = as.factor(price_dummy)) 
+
+### Integration of War Dummy (March 22)
+
+df_nb_long_heating <- df_nb_long_heating |> 
+  mutate(
+    war_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-02-01"), 0, 1)
+  ) |> 
+  relocate(war_dummy, .after = price_dummy)
+
+df_nb_long_heating <- df_nb_long_heating |> 
+   mutate(war_dummy = as.factor(war_dummy)) 
+
+# Select only the column sum_days_temp from df_gradtage_buch
+df_sum_days_temp <- df_gradtage_buch |> 
+  select(month, HDD = sum_days_temp)
+
+df_sum_days_temp <- df_sum_days_temp |> 
+  mutate(month = format(month, "%Y-%m"))
+
+df_sum_days_temp <- df_sum_days_temp %>% 
+  mutate(month = as.Date(paste0(month, "-01")))
+
+# Perform a left join between df_nb_long and df_sum_days_temp based on year_month and month
+
+df_nb_long_heating <- df_nb_long_heating %>% 
+  mutate(year_month = as.Date(paste0(year_month, "-01")))
+
+
+df_nb_long_heating$year_month <- as.Date(df_nb_long_heating$year_month, format = "%Y-%m-%d")
+
+df_nb_long_heating <- left_join(df_nb_long_heating, df_sum_days_temp, by = c("year_month" = "month")) 
+
+df_nb_long_heating <- df_nb_long_heating |> 
+  relocate(HDD, .after = consumption)
+
+
+### Integration of Sqm
+
+df_nb_long_heating <- df_nb_long_heating |> 
+  mutate(consumption_sqm = consumption/living_area_heated) 
+
+df_nb_long_heating <- df_nb_long_heating |> 
+  relocate(consumption_sqm, .after = consumption)
+
+df_nb_long_heating <- df_nb_long_heating %>%
+  filter(!is.na(tenant_birthyear)) %>%
+  mutate(cohort = case_when(
+    tenant_birthyear < 1979.9 ~ 0,  # Condition for cohort 1
+    tenant_birthyear >= 1980 ~ 1,  # Condition for cohort 2
+  ))
+
+df_nb_long_heating_old <- df_nb_long_heating |> 
+  filter(cohort == 0)
+
+
+df_nb_long_heating_young <- df_nb_long_heating |> 
+  filter(cohort == 1)
+```
+
+# PIVOT Long to Wide 
+
+## All energy types
+
+```{r}
+df_nb_wide <- df_nb_long  |> 
+  select(user_id, energy_type, year_month, consumption) |> 
+  pivot_wider(
+    id_cols = c(user_id, energy_type), 
+    names_from = year_month, 
+    values_from = c(consumption)
+  )
+
+# Let's add the time-invariant variables by joining the distinct social_assist value for each user_id to the dataframe in a wide format 
+
+df_nb_social_assist <- df_nb_long %>%
+  select(user_id, social_assist) %>%
+  distinct()
+
+sum(is.na(df_nb_social_assist$user_id))
+
+df_nb_wide <- df_nb_wide |> 
+  left_join (df_nb_social_assist) |> 
+  relocate(social_assist, .after = energy_type)
+
+# Let's now add all the other time-invariant variables 
+
+df_nb_time_inv_var <- df_nb_processed |> 
+  select(user_id, energy_carrier, energy_class, living_area_heated, floor_number, floor_type, building_year, building_type, street, city_district, object, economic_entity, property_key ,energy_class_numeric ,insulation_dummy, balcony_dummy, heating_system, payment_proportion, fixed_costs, tenant_birthyear) |> 
+  distinct()
+
+# tenant_gender cannot be taken into account as it is not always time-invariant for the users
+
+df_nb_wide <- df_nb_wide |> 
+  left_join (df_nb_time_inv_var)
+
+df_nb_wide
+
+```
+
+## Heating
+
+```{r}
+
+df_nb_wide_heating <- df_nb_wide |> 
+  filter(energy_type %in% c("Heizung", "Wärmemengenzähler"))
+
+df_nb_wide_heating <- df_nb_wide_heating |> 
+  left_join (df_nb_social_assist) |> 
+  relocate(social_assist, .after = energy_type)
+
+freq(df_nb_wide_heating$social_assist)
+
+```
+
+
+# DT - Rem. Common Support 
+
+## Distribution of Heating Degree Days 
+
+```{r}
+barplot_heating_degrees_buch <- ggplot(data = df_gradtage_buch, aes(x = month, y = sum_days_temp)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(
+    title = "Evolution of Heating Degrees by Month in Buch, Berlin",
+    y = "Sum of Heating Degrees",
+    x = "Month"
+  ) +
+  scale_x_date(date_labels = "%m-%Y", date_breaks = "1 month") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8))
+
+barplot_heating_degrees_buch
+
+gt <- ggplotGrob(barplot_heating_degrees_buch)
+grid.newpage()
+grid.draw(gt)
+ggsave(paste0(my_dir$output_figures, "barplot_heating_degrees_buch.png"),
+       plot = gt,
+       width = 14, height = 8, dpi = 600, units = "in",
+       device = "png")
+
+```
+
+
+## Summary Table Heating 
+
+```{r}
+
+label(df_nb_long_heating$consumption) <- "Heating Consumption (kWh)"
+label(df_nb_long_heating$social_assist) <- "Social Assistance Receiver"
+label(df_nb_long_heating$energy_carrier) <- "Energy Carrier"
+label(df_nb_long_heating$living_area_heated) <- "Living Heated Area (sqm)"
+label(df_nb_long_heating$floor_type) <- "Floor Type"
+label(df_nb_long_heating$building_year) <- "Building Construction Year"
+label(df_nb_long_heating$building_type) <- "Building Type"
+label(df_nb_long_heating$fixed_costs) <- "Monthly Fixed Costs"
+label(df_nb_long_heating$insulation_dummy) <- "Insulation Status"
+label(df_nb_long_heating$balcony_dummy) <- "Balcony Dummy"
+label(df_nb_long_heating$cohort) <- "Cohort"
+
+table1::table1(~consumption + social_assist + energy_carrier + living_area_heated + floor_type + balcony_dummy + building_year + building_type + energy_class + insulation_dummy + fixed_costs + tenant_birthyear| social_assist, data = df_nb_long_heating)
+
+```
+
+
+# Heating - Perform - Mahalanobis
+
+```{r}
+
+freq(df_nb_wide_heating$tenant_birthyear)
+
+
+df_nb_wide_heating <- df_nb_wide_heating |> 
+  filter(tenant_birthyear < 2005)
+
+df_nb_wide_heating_ <- df_nb_wide_heating |> 
+  filter(social_assist ==0)
+
+length(unique(df_nb_wide_heating$user_id))
+
+match_social_heating_maha <- matchit(social_assist ~ energy_class + living_area_heated + 
+                                        floor_type + building_type + balcony_dummy + tenant_birthyear, 
+                                        data = df_nb_wide_heating, 
+                                        exact = ~ energy_class + floor_type + building_type + balcony_dummy, 
+                                        method = "nearest",
+                                        distance = "mahalanobis", 
+                                        replace = TRUE)
+
+
+
+summary(match_social_heating_maha)
+
+
+plot(match_social_heating_maha, type = "density", interactive = FALSE,
+     which.xs = ~ tenant_birthyear + living_area_heated + energy_class + 
+                                        floor_type + building_type + balcony_dummy) 
+
+matched_data_social_heating_maha <- match.data(match_social_heating_maha)
+
+table(matched_data_social_heating_maha$social_assist)
+
+```
+
+## Transform into long df - Heating
+
+```{r}
+matched_data_social_heating_long_maha <- matched_data_social_heating_maha |> 
+  pivot_longer(cols = `2019-02-01`:`2023-10-01`, # Pivot the Januar to December columns
+               names_to = "year_month",
+               values_to = "consumption") |> 
+  relocate(year_month, consumption, .after = energy_type) 
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha  |> 
+  mutate(month = substr(year_month, 6, 7))  |> 
+  mutate(month = as.factor(month)) |> 
+  relocate(month, .after = year_month)
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha  |> 
+  mutate(year = substr(year_month, 1,4))  |> 
+  mutate(year = as.factor(year)) |> 
+  relocate(year, .after = year_month)
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha %>% 
+  mutate(year_month = as.Date(paste0(year_month, "-01"), format = "%Y-%m-%d"))
+
+```
+
+### Integration of Price Dummy (August 22) 
+ 
+```{r}
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha |> 
+  mutate(
+    price_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-07-01"), 0, 1)
+  ) |> 
+  relocate(price_dummy, .after = social_assist) 
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha |> 
+   mutate(price_dummy = as.factor(price_dummy)) 
+```
+
+### Integration of War Dummy (March 22)
+
+```{r}
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha |> 
+  mutate(
+    war_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-02-01"), 0, 1)
+  ) |> 
+  relocate(war_dummy, .after = price_dummy)
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha |> 
+   mutate(war_dummy = as.factor(war_dummy)) 
+```
+
+### Integration of HDD 
+
+```{r}
+# Select only the column sum_days_temp from df_gradtage_buch
+df_sum_days_temp <- df_gradtage_buch |> 
+  select(month, HDD = sum_days_temp)
+
+df_sum_days_temp <- df_sum_days_temp %>%
+  mutate(month = as.Date(paste0(month, "-01")))  # Adding "-01" to create a standard date format
+
+# Perform a left join between df_nb_long and df_sum_days_temp based on year_month and month
+matched_data_social_heating_long_maha <- left_join(matched_data_social_heating_long_maha, df_sum_days_temp, by = c("year_month" = "month"))
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha |> 
+  relocate(HDD, .after = consumption)
+
+```
+
+### Integration of Sqm
+
+```{r}
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha |> 
+  mutate(consumption_sqm = consumption/living_area_heated) 
+
+matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha |> 
+  relocate(consumption_sqm, .after = consumption)
+```
+
+### Split into cohorts 
+
+```{r}
+# matched_data_social_heating_long_maha <- matched_data_social_heating_long_maha %>%
+#   filter(!is.na(tenant_birthyear)) %>%
+#   mutate(cohort = case_when(
+#     tenant_birthyear < 1979.9 ~ 0,  # Condition for cohort 1
+#     tenant_birthyear >= 1980 ~ 1,  # Condition for cohort 2
+#   ))
+# 
+
+
+ggplot(matched_data_social_heating_long_maha_old, aes(x = tenant_birthyear, fill = factor(social_assist))) +
+  geom_histogram(binwidth = 2, color = "black", position = "dodge") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red"), name = "Social Assist") +
+  xlab("Tenant Birth Year") +
+  ylab("Frequency") +
+  ggtitle("Old Cohort / Distribution of Tenant Birth Years by Social Assist Status - After Matching") +
+  labs(fill = "Social Assist") # To change the legend title
+
+ggplot(matched_data_social_heating_long_maha_young, aes(x = tenant_birthyear, fill = factor(social_assist))) +
+  geom_histogram(binwidth = 2, color = "black", position = "dodge") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red"), name = "Social Assist") +
+  xlab("Tenant Birth Year") +
+  ylab("Frequency") +
+  ggtitle("Young Cohort / Distribution of Tenant Birth Years by Social Assist Status - After Matching") +
+  labs(fill = "Social Assist") # To change the legend title
+
+```
+
+# Heating OLD - Perform Mahalanobis
+
+```{r}
+
+freq(df_nb_wide_heating$tenant_birthyear)
+
+
+df_nb_wide_heating_old <- df_nb_wide_heating |> 
+  filter(tenant_birthyear < 1970)
+
+
+match_social_heating_maha_old <- matchit(social_assist ~ energy_class + living_area_heated + 
+                                        floor_type + building_type + balcony_dummy + tenant_birthyear, 
+                                        data = df_nb_wide_heating_old, 
+                                        exact = ~ energy_class + floor_type + building_type + balcony_dummy, 
+                                        method = "nearest",
+                                        distance = "mahalanobis", 
+                                        replace = TRUE)
+
+plot(match_social_heating_maha_old, type = "density", interactive = FALSE,
+     which.xs = ~ tenant_birthyear + living_area_heated + energy_class + 
+                                        floor_type + building_type + balcony_dummy) 
+
+plot(summary(match_social_heating_maha_old))
+                                        
+
+matched_data_social_heating_maha_old <- match.data(match_social_heating_maha_old)
+
+table(matched_data_social_heating_maha_old$social_assist)
+
+
+```
+
+## Transform into long df - Heating
+
+```{r}
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+  pivot_longer(cols = `2019-02-01`:`2023-10-01`, # Pivot the Januar to December columns
+               names_to = "year_month",
+               values_to = "consumption") |> 
+  relocate(year_month, consumption, .after = energy_type) 
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old  |> 
+  mutate(month = substr(year_month, 6, 7))  |> 
+  mutate(month = as.factor(month)) |> 
+  relocate(month, .after = year_month)
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old  |> 
+  mutate(year = substr(year_month, 1,4))  |> 
+  mutate(year = as.factor(year)) |> 
+  relocate(year, .after = year_month)
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old %>% 
+  mutate(year_month = as.Date(paste0(year_month, "-01"), format = "%Y-%m-%d"))
+```
+
+### Integration of Price Dummy (August 22) 
+ 
+```{r}
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+  mutate(
+    price_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-07-01"), 0, 1)
+  ) |> 
+  relocate(price_dummy, .after = social_assist) 
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+   mutate(price_dummy = as.factor(price_dummy)) 
+```
+
+### Integration of War Dummy (March 22)
+
+```{r}
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+  mutate(
+    war_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-02-01"), 0, 1)
+  ) |> 
+  relocate(war_dummy, .after = price_dummy)
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+   mutate(war_dummy = as.factor(war_dummy)) 
+```
+
+### Integration of HDD 
+
+```{r}
+# Select only the column sum_days_temp from df_gradtage_buch
+df_sum_days_temp <- df_gradtage_buch |> 
+  select(month, HDD = sum_days_temp)
+
+df_sum_days_temp <- df_sum_days_temp %>%
+  mutate(month = as.Date(paste0(month, "-01")))  # Adding "-01" to create a standard date format
+
+# Perform a left join between df_nb_long and df_sum_days_temp based on year_month and month
+matched_data_social_heating_maha_old <- left_join(matched_data_social_heating_maha_old, df_sum_days_temp, by = c("year_month" = "month"))
+
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+  relocate(HDD, .after = consumption)
+
+```
+
+### Integration of Sqm
+
+```{r}
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+  mutate(consumption_sqm = consumption/living_area_heated) 
+
+matched_data_social_heating_maha_old <- matched_data_social_heating_maha_old |> 
+  relocate(consumption_sqm, .after = consumption)
+```
+
+
+# Heating YOUNG - Perform Mahalanobis
+
+```{r}
+
+freq(df_nb_wide_heating$tenant_birthyear)
+
+
+df_nb_wide_heating_young <- df_nb_wide_heating |> 
+  filter(tenant_birthyear >= 1970)
+
+
+match_social_heating_maha_young <- matchit(social_assist ~ energy_class + living_area_heated + 
+                                        floor_type + building_type + balcony_dummy + tenant_birthyear, 
+                                        data = df_nb_wide_heating_young, 
+                                        exact = ~ energy_class + floor_type + building_type + balcony_dummy, 
+                                        method = "nearest",
+                                        distance = "mahalanobis", 
+                                        replace = TRUE)
+
+plot(match_social_heating_maha_young, type = "density", interactive = FALSE,
+     which.xs = ~ tenant_birthyear + living_area_heated + energy_class + 
+                                        floor_type + building_type + balcony_dummy) 
+
+plot(summary(match_social_heating_maha_young))
+                                        
+
+matched_data_social_heating_maha_young <- match.data(match_social_heating_maha_young)
+
+table(matched_data_social_heating_maha_young$social_assist)
+
+
+```
+
+## Transform into long df - Heating
+
+```{r}
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+  pivot_longer(cols = `2019-02-01`:`2023-10-01`, # Pivot the Januar to December columns
+               names_to = "year_month",
+               values_to = "consumption") |> 
+  relocate(year_month, consumption, .after = energy_type) 
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young  |> 
+  mutate(month = substr(year_month, 6, 7))  |> 
+  mutate(month = as.factor(month)) |> 
+  relocate(month, .after = year_month)
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young  |> 
+  mutate(year = substr(year_month, 1,4))  |> 
+  mutate(year = as.factor(year)) |> 
+  relocate(year, .after = year_month)
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young %>% 
+  mutate(year_month = as.Date(paste0(year_month, "-01"), format = "%Y-%m-%d"))
+```
+
+### Integration of Price Dummy (August 22) 
+ 
+```{r}
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+  mutate(
+    price_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-07-01"), 0, 1)
+  ) |> 
+  relocate(price_dummy, .after = social_assist) 
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+   mutate(price_dummy = as.factor(price_dummy)) 
+```
+
+### Integration of War Dummy (March 22)
+
+```{r}
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+  mutate(
+    war_dummy = ifelse(as.Date(paste0(year_month, "-01")) <= as.Date("2022-02-01"), 0, 1)
+  ) |> 
+  relocate(war_dummy, .after = price_dummy)
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+   mutate(war_dummy = as.factor(war_dummy)) 
+```
+
+### Integration of HDD 
+
+```{r}
+# Select only the column sum_days_temp from df_gradtage_buch
+df_sum_days_temp <- df_gradtage_buch |> 
+  select(month, HDD = sum_days_temp)
+
+df_sum_days_temp <- df_sum_days_temp %>%
+  mutate(month = as.Date(paste0(month, "-01")))  # Adding "-01" to create a standard date format
+
+# Perform a left join between df_nb_long and df_sum_days_temp based on year_month and month
+matched_data_social_heating_maha_young <- left_join(matched_data_social_heating_maha_young, df_sum_days_temp, by = c("year_month" = "month"))
+
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+  relocate(HDD, .after = consumption)
+
+```
+
+### Integration of Sqm
+
+```{r}
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+  mutate(consumption_sqm = consumption/living_area_heated) 
+
+matched_data_social_heating_maha_young <- matched_data_social_heating_maha_young |> 
+  relocate(consumption_sqm, .after = consumption)
+```
+
+
+
+# Regressions 
+
+## War Dummy - Heating
+
+### OLS
+
+```{r}
+
+matched_data_social_heating_long_maha_1 <- matched_data_social_heating_long_maha |>
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_0 <- matched_data_social_heating_long_maha |>
+  filter(social_assist == 0)
+
+matched_data_social_heating_long_maha_old_1 <- matched_data_social_heating_maha_old |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_old_0 <- matched_data_social_heating_maha_old |> 
+  filter(social_assist == 0)
+
+matched_data_social_heating_long_maha_young_1 <- matched_data_social_heating_maha_young |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_young_0 <- matched_data_social_heating_maha_young |> 
+  filter(social_assist == 0)
+
+
+did_matched_war <-  lm(log(consumption + 1) ~ social_assist*war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha)
+
+did_matched_war_social <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_1)
+
+did_matched_war_control <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_0)
+
+did_matched_war_old <-  lm(log(consumption + 1) ~ social_assist*war_dummy + log(HDD+1), data = matched_data_social_heating_maha_old)
+
+did_matched_war_old_social <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_old_1)
+
+did_matched_war_old_control <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_old_0)
+
+did_matched_war_young <-  lm(log(consumption + 1) ~ social_assist*war_dummy + log(HDD+1), data = matched_data_social_heating_maha_young)
+
+did_matched_war_young_social <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_young_1)
+
+did_matched_war_young_control <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_young_0)
+
+
+
+
+modelsummary::modelsummary(list("All" = did_matched_war,
+                                "Social Assistance" = did_matched_war_social, 
+                                "Control" = did_matched_war_control,
+                                "Older Cohort" = did_matched_war_old,
+                                "Older Cohort - Social" = did_matched_war_old_social, 
+                                "Older Cohort - Control" = did_matched_war_old_control, 
+                                "Younger Cohort" = did_matched_war_young, 
+                                "Younger Cohort - Social" = did_matched_war_young_social, 
+                                "Younger Cohort - Control" = did_matched_war_young_control),
+                           stars = c('*' = .1, '**' = .05, '***' = .01),
+                           statistic = 'conf.int',
+                           gof_omit = "AIC|BIC|Log.Lik.",
+                           fmt = 2, 
+                           title = "OLS Model - Effect of War Begin on Logarithm of Heating Consumption (kWh) by treatment group")
+
+```
+
+#### Between 03/2021 and 03/2023 
+
+```{r}
+##### Until April 2023
+
+matched_data_social_heating_long_maha_short <- matched_data_social_heating_long_maha %>%
+  filter(year_month > "2021-02-01" & year_month < "2023-04-01")
+
+matched_data_social_heating_long_maha_short_1 <- matched_data_social_heating_long_maha_short |> 
+   filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_short_0 <- matched_data_social_heating_long_maha_short |> 
+   filter(social_assist == 0)
+  
+matched_data_social_heating_long_maha_short_old <- matched_data_social_heating_maha_old |>
+  filter(year_month > "2021-02-01" & year_month < "2023-04-01")
+
+matched_data_social_heating_long_maha_short_old_1 <- matched_data_social_heating_long_maha_short_old |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_short_old_0 <- matched_data_social_heating_long_maha_short_old |> 
+  filter(social_assist == 0)
+
+matched_data_social_heating_long_maha_short_young <- matched_data_social_heating_maha_young |>
+  filter(year_month > "2021-02-01" & year_month < "2023-04-01")
+
+matched_data_social_heating_long_maha_short_young_1 <- matched_data_social_heating_long_maha_short_young |> 
+ filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_short_young_0 <- matched_data_social_heating_long_maha_short_young |> 
+ filter(social_assist == 0)
+
+
+did_matched_war_short <-  lm(log(consumption + 1) ~ social_assist*war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short)
+
+did_matched_war_social_short <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_1)
+
+did_matched_war_control_short <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_0)
+
+did_matched_war_old_short <-  lm(log(consumption + 1) ~ social_assist*war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_old)
+
+did_matched_war_old_social_short <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_old_1)
+
+did_matched_war_old_control_short <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_old_0)
+
+did_matched_war_young_short <-  lm(log(consumption + 1) ~ social_assist*war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_young)
+
+did_matched_war_young_social_short <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_young_1)
+
+did_matched_war_young_control_short <-  lm(log(consumption + 1) ~ war_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_short_young_0)
+
+modelsummary::modelsummary(list("All" = did_matched_war_short, 
+                                "Social Assistance" = did_matched_war_social_short, 
+                                "Control" = did_matched_war_control_short, 
+                                "Older Cohort" = did_matched_war_old_short,
+                                "Older Cohort - Social" = did_matched_war_old_social_short, 
+                                "Older Cohort - Control" = did_matched_war_old_control_short, 
+                                "Younger Cohort" = did_matched_war_young_short,
+                                "Younger Cohort - Social" = did_matched_war_young_social_short, 
+                                "Younger Cohort - Control" = did_matched_war_young_control_short),
+                           stars = c('*' = .1, '**' = .05, '***' = .01),
+                           statistic = 'conf.int',
+                           gof_omit = "AIC|BIC|Log.Lik.",
+                           fmt = 2, 
+                           title = "OLS Model - Effects of the War on Logarithm of Heating Consumption by treatement Group and with monhtly interaction effects(kWh) - Between March 2021 and March 2023")
+
+
+
+```
+
+
+
+### Fixed Effects 
+
+```{r}
+
+matched_data_social_heating_long_maha_1 <- matched_data_social_heating_long_maha |>
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_0 <- matched_data_social_heating_long_maha |>
+  filter(social_assist == 0)
+
+matched_data_social_heating_long_maha_old_1 <- matched_data_social_heating_maha_old |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_old_0 <- matched_data_social_heating_maha_old |> 
+  filter(social_assist == 0)
+
+
+matched_data_social_heating_long_maha_young_1 <- matched_data_social_heating_maha_young |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_young_0 <- matched_data_social_heating_maha_young |> 
+  filter(social_assist == 0)
+
+
+m_all <- feols(log(consumption +1) ~ war_dummy + log(HDD+1) | user_id + year + month, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha)
+
+m_social <- feols(log(consumption +1) ~ war_dummy + log(HDD+1)| user_id + month + year, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_1)
+
+m_control <- feols(log(consumption +1) ~ war_dummy + log(HDD+1) | user_id + month + year, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_0)
+
+m_old <- feols(log(consumption +1) ~ war_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_maha_old)
+
+m_old_social <- feols(log(consumption +1) ~ war_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_old_1)
+
+m_old_control <- feols(log(consumption +1) ~ war_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_old_0)
+
+m_young <- feols(log(consumption +1) ~ war_dummy + log(HDD+1) | user_id + month+ year , panel.id = ~user_id + year_month, matched_data_social_heating_maha_young)
+
+m_young_social <- feols(log(consumption +1) ~ war_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_young_1)
+
+m_young_control <- feols(log(consumption +1) ~ war_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_young_0)
+
+
+modelsummary::modelsummary(list("All" = m_all,
+                                "Social Assistance" = m_social, 
+                                "Control" = m_control, 
+                                "Older Cohort" = m_old,
+                                "Older Cohort - Social" = m_old_social, 
+                                "Older Cohort - Control" = m_old_control, 
+                                "Younger Cohort" = m_young,
+                                "Younger Cohort - Social" = m_young_social, 
+                                "Younger Cohort - Control" = m_young_control),
+                           stars = c('*' = .1, '**' = .05, '***' = .01),
+                           statistic = 'conf.int',
+                           gof_omit = "AIC|BIC|Log.Lik.",
+                           fmt = 2, 
+                           title = "Fixed Effect Model - Effects of the War on Logarithm of Heating Consumption (kWh) by treatement Group")
+
+
+```
+
+##### Between 03/2021 and 03/2023
+
+```{r}
+matched_data_social_heating_long_maha_short <- matched_data_social_heating_long_maha |>
+  filter(year_month > "2021-02-01" & year_month < "2023-04-01")
+
+
+matched_data_social_heating_long_maha_short_1 <- matched_data_social_heating_long_maha_short |> 
+   filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_short_0 <- matched_data_social_heating_long_maha_short |> 
+   filter(social_assist == 0)
+  
+matched_data_social_heating_long_maha_short_old <- matched_data_social_heating_maha_old |>
+  filter(year_month > "2021-02-01" & year_month < "2023-04-01")
+
+matched_data_social_heating_long_maha_short_old_1 <- matched_data_social_heating_long_maha_short_old |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_short_old_0 <- matched_data_social_heating_long_maha_short_old |> 
+  filter(social_assist == 0)
+
+matched_data_social_heating_long_maha_short_young <- matched_data_social_heating_maha_young |>
+  filter(year_month > "2021-02-01" & year_month < "2023-04-01")
+
+matched_data_social_heating_long_maha_short_young_1 <- matched_data_social_heating_long_maha_short_young |> 
+ filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_short_young_0 <- matched_data_social_heating_long_maha_short_young |> 
+ filter(social_assist == 0)
+
+
+m_all_short <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id + month + year, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short)
+
+m_all_short_social <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id + month + year, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_1)
+
+m_all_short_control <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) |user_id +  month + year, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_0)
+
+m_old_short <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_old)
+
+m_old_short_1 <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id + year + month ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_old_1)
+
+m_old_short_0 <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id + year + month ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_old_0)
+
+m_young_short <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id + year + month , panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_young)
+
+m_young_short_1 <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id +  year + month , panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_young_1)
+
+m_young_short_0 <- feols(log(consumption + 1) ~ war_dummy + log(HDD+1) | user_id +  year + month , panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_short_young_0)
+
+
+
+modelsummary::modelsummary(list("All" = m_all_short, 
+                                "Social Assistance" = m_all_short_social, 
+                                "Control" = m_all_short_control, 
+                                "Older Cohort" = m_old_short,
+                                "Older Cohort - Social" = m_old_short_1, 
+                                "Older Cohort - Control" = m_old_short_0, 
+                                "Younger Cohort" = m_young_short,
+                                "Younger Cohort - Social" = m_young_short_1, 
+                                "Younger Cohort - Control" = m_young_short_0),
+                           stars = c('*' = .1, '**' = .05, '***' = .01),
+                           statistic = 'conf.int',
+                           gof_omit = "AIC|BIC|Log.Lik.",
+                           fmt = 2, 
+                           title = "Fixed Effect Model - Effects of the War Begin Increase on Logarithm of Heating Consumption by treatement Group and with monhtly interaction effects(kWh) - Until March 2023")
+
+
+
+
+```
+
+## Price Dummy - Heating
+
+### OLS 
+
+
+```{r}
+matched_data_social_heating_long_maha_price <- matched_data_social_heating_long_maha |> 
+  filter(year_month < "2022-03-01" | year_month > "2022-07-01")
+
+matched_data_social_heating_long_maha_1_price <- matched_data_social_heating_long_maha_price |>
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_0_price <- matched_data_social_heating_long_maha_price |>
+  filter(social_assist == 0)
+
+matched_data_social_heating_maha_old_price <- matched_data_social_heating_maha_old |> 
+  filter(year_month < "2022-03-01" | year_month > "2022-07-01")
+
+
+matched_data_social_heating_long_maha_old_1_price <- matched_data_social_heating_maha_old_price |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_old_0_price <- matched_data_social_heating_maha_old_price |> 
+  filter(social_assist == 0)
+
+matched_data_social_heating_maha_young_price <- matched_data_social_heating_maha_young |> 
+  filter(year_month < "2022-03-01" | year_month > "2022-07-01")
+
+
+matched_data_social_heating_long_maha_young_1_price <- matched_data_social_heating_maha_young_price |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_young_0_price <- matched_data_social_heating_maha_young_price |> 
+  filter(social_assist == 0)
+
+
+
+did_matched_price <-  lm(log(consumption + 1) ~ social_assist*price_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_price)
+
+did_matched_social_price <-  lm(log(consumption + 1) ~ price_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_1_price)
+
+did_matched_control_price <-  lm(log(consumption + 1) ~ price_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_0_price)
+
+did_matched_old_price <-  lm(log(consumption + 1) ~ social_assist*price_dummy + log(HDD+1), data = matched_data_social_heating_maha_old_price)
+
+did_matched_old_social_price <-  lm(log(consumption + 1) ~ price_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_old_1_price)
+
+did_matched_old_control_price <-  lm(log(consumption + 1) ~ price_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_old_0_price)
+
+did_matched_young_price <-  lm(log(consumption + 1) ~ social_assist*price_dummy + log(HDD+1), data = matched_data_social_heating_maha_young_price)
+
+did_matched_young_social_price <-  lm(log(consumption + 1) ~ price_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_young_1_price)
+
+did_matched_young_control_price <-  lm(log(consumption + 1) ~ price_dummy + log(HDD+1), data = matched_data_social_heating_long_maha_young_0_price)
+
+
+modelsummary::modelsummary(list("All" = did_matched_price,
+                                "Social Assistance" = did_matched_social_price, 
+                                "Control" = did_matched_control_price,
+                                "Older Cohort" = did_matched_old_price,
+                                "Older Cohort - Social" = did_matched_old_social_price, 
+                                "Older Cohort - Control" = did_matched_old_control_price, 
+                                "Younger Cohort" = did_matched_young_price, 
+                                "Younger Cohort - Social" = did_matched_young_social_price, 
+                                "Younger Cohort - Control" = did_matched_young_control_price),
+                           stars = c('*' = .1, '**' = .05, '***' = .01),
+                           statistic = 'conf.int',
+                           gof_omit = "AIC|BIC|Log.Lik.",
+                           fmt = 2, 
+                           title = "OLS Model - Effect of Price Increase on Logarithm of Heating Consumption (kWh)")
+
+
+                          
+
+```
+
+### Fixed Effects 
+
+```{r}
+
+matched_data_social_heating_long_maha_price <- matched_data_social_heating_long_maha |> 
+  filter(year_month < "2022-03-01" | year_month > "2022-07-01")
+
+matched_data_social_heating_long_maha_1_price <- matched_data_social_heating_long_maha_price |>
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_0_price <- matched_data_social_heating_long_maha_price |>
+  filter(social_assist == 0)
+
+matched_data_social_heating_maha_old_price <- matched_data_social_heating_maha_old |> 
+  filter(year_month < "2022-03-01" | year_month > "2022-07-01")
+
+
+matched_data_social_heating_long_maha_old_1_price <- matched_data_social_heating_maha_old_price |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_old_0_price <- matched_data_social_heating_maha_old_price |> 
+  filter(social_assist == 0)
+
+matched_data_social_heating_maha_young_price <- matched_data_social_heating_maha_young |> 
+  filter(year_month < "2022-03-01" | year_month > "2022-07-01")
+
+
+matched_data_social_heating_long_maha_young_1_price <- matched_data_social_heating_maha_young_price |> 
+  filter(social_assist == 1)
+
+matched_data_social_heating_long_maha_young_0_price <- matched_data_social_heating_maha_young_price |> 
+  filter(social_assist == 0)
+
+
+
+m_all_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1) | user_id + year + month, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_price)
+
+m_social_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1)| user_id + month + year, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_1_price)
+
+m_control_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1) | user_id + month + year, panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_0_price)
+
+m_old_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_maha_old_price)
+
+m_old_social_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_old_1_price)
+
+m_old_control_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_old_0_price)
+
+m_young_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1) | user_id + month + year , panel.id = ~user_id + year_month, matched_data_social_heating_maha_young_price)
+
+m_young_social_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_young_1_price)
+
+m_young_control_price <- feols(log(consumption +1) ~ price_dummy + log(HDD+1)| user_id + month + year ,panel.id = ~user_id + year_month, matched_data_social_heating_long_maha_young_0_price)
+
+
+modelsummary::modelsummary(list("All" = m_all_price,
+                                "Social Assistance" = m_social_price, 
+                                "Control" = m_control_price, 
+                                "Older Cohort" = m_old_price,
+                                "Older Cohort - Social" = m_old_social_price, 
+                                "Older Cohort - Control" = m_old_control_price, 
+                                "Younger Cohort" = m_young_price,
+                                "Younger Cohort - Social" = m_young_social_price, 
+                                "Younger Cohort - Control" = m_young_control_price),
+                           stars = c('*' = .1, '**' = .05, '***' = .01),
+                           statistic = 'conf.int',
+                           gof_omit = "AIC|BIC|Log.Lik.",
+                           fmt = 2, 
+                           title = "Fixed Effect Model - Effects of the Price on Logarithm of Heating Consumption (kWh) by treatement Group")
+
+```
+
+
+
+
+## Parallel Trend Assumption 
+
+```{r}
+
+parallel_trend_test_matched <- matched_data_social_heating_long_maha |> 
+  dplyr::group_by(year_month, social_assist) |>  # Group to extract means of each group at each time
+  dplyr::mutate(group_mean = mean(consumption, na.rm = TRUE)) |> 
+  ggplot(aes(x = year_month, y = group_mean, color = factor(social_assist), group = factor(social_assist))) +
+  geom_point() +
+  geom_line() +
+  scale_color_manual(name = " ", # Changes to color dimension
+                     values = c("blue", "#cc0055"),
+                     labels = c("Control", "Treatment")) +
+  labs(x = "Time periods", y = "Heating consumed (kWh)", color = "Social Assist Group",
+       title = "Average Monhtly Heating Consumption by Treatment and Control Group, After Matching") +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 8),  
+        legend.position = "bottom") 
+
+
+gt <- ggplotGrob(parallel_trend_test_matched)
+grid.newpage()
+grid.draw(gt)
+ggsave(paste0(my_dir$output_figures, "parallel_trend_test_matched.png"),
+       plot = gt,
+       width = 14, height = 8, dpi = 600, units = "in",
+       device = "png")
+```
+
+
+
+
+
