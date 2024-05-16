@@ -95,11 +95,11 @@ my_dir$output_tables <- "output/tables/"
 
 # Load the data 
 
-##Load data - Neues Berlin
+##Load data 
 
 ```{r}
 
-file_path <- "../data/Verbrauchsdaten_alle Liegenschaften_final.xlsx"
+file_path <- "../data/.xlsx"
 
 df_nb_raw <- tibble(read_excel(file_path))
 
@@ -189,7 +189,7 @@ df_gradtage_raw
 
 # Cleaning the Data 
 
-## Cleaning data - Neues Berlin 
+## Cleaning data
 
 ```{r}
 #Select the variables of interest, changing name to English and reordering variables according to our interest
@@ -299,9 +299,9 @@ df_gradtage_buch <- df_gradtage_buch |>
 
 # Data Transformation 1
 
-## Data Transformation - Neues Berlin
+## Data Transformation 
 
-### Character into factors: turn the variables into factor by giving levels - Neues Berlin
+### Character into factors: turn the variables into factor by giving levels 
 
 #### Energy Efficiency 
 ```{r}
@@ -362,7 +362,7 @@ df_nb_processed <- df_nb_processed |>
   relocate(floor_type, .after = floor_total)
 ```
 
-### Logical variables : turn the variables into logical by using ifelse - Neues Berlin
+### Logical variables : turn the variables into logical by using ifelse
 
 ```{r}
 df_nb_processed <- df_nb_processed |> 
